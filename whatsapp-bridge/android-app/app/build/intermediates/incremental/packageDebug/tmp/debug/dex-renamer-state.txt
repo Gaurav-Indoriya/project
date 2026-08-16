@@ -1,0 +1,4 @@
+#Sun Aug 16 11:00:32 IST 2026
+base.0=F\:\\project\\whatsapp-bridge\\android-app\\app\\build\\intermediates\\dex\\debug\\mergeDexDebug\\classes.dex
+path.0=classes.dex
+renamed.0=classes.dex

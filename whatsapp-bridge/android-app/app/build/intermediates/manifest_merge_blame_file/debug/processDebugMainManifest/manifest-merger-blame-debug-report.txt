@@ -1,0 +1,81 @@
+1<?xml version="1.0" encoding="utf-8"?>
+2<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+3    package="com.wabridge"
+4    android:versionCode="1"
+5    android:versionName="1.0" >
+6
+7    <uses-sdk
+7-->INJECTED
+8        android:minSdkVersion="18"
+8-->INJECTED
+9        android:targetSdkVersion="34" />
+9-->INJECTED
+10
+11    <uses-permission android:name="android.permission.INTERNET" />
+11-->F:\project\whatsapp-bridge\android-app\app\src\main\AndroidManifest.xml:4:5-67
+11-->F:\project\whatsapp-bridge\android-app\app\src\main\AndroidManifest.xml:4:22-64
+12    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+12-->F:\project\whatsapp-bridge\android-app\app\src\main\AndroidManifest.xml:5:5-79
+12-->F:\project\whatsapp-bridge\android-app\app\src\main\AndroidManifest.xml:5:22-76
+13    <uses-permission android:name="android.permission.VIBRATE" />
+13-->F:\project\whatsapp-bridge\android-app\app\src\main\AndroidManifest.xml:6:5-66
+13-->F:\project\whatsapp-bridge\android-app\app\src\main\AndroidManifest.xml:6:22-63
+14
+15    <application
+15-->F:\project\whatsapp-bridge\android-app\app\src\main\AndroidManifest.xml:8:5-38:19
+16        android:allowBackup="true"
+16-->F:\project\whatsapp-bridge\android-app\app\src\main\AndroidManifest.xml:9:9-35
+17        android:debuggable="true"
+18        android:extractNativeLibs="true"
+18-->INJECTED
+19        android:icon="@mipmap/ic_launcher"
+19-->F:\project\whatsapp-bridge\android-app\app\src\main\AndroidManifest.xml:11:9-43
+20        android:label="@string/app_name"
+20-->F:\project\whatsapp-bridge\android-app\app\src\main\AndroidManifest.xml:13:9-41
+21        android:roundIcon="@mipmap/ic_launcher_round"
+21-->F:\project\whatsapp-bridge\android-app\app\src\main\AndroidManifest.xml:12:9-54
+22        android:theme="@android:style/Theme.DeviceDefault.Light.NoActionBar"
+22-->F:\project\whatsapp-bridge\android-app\app\src\main\AndroidManifest.xml:14:9-77
+23        android:usesCleartextTraffic="true" >
+23-->F:\project\whatsapp-bridge\android-app\app\src\main\AndroidManifest.xml:10:9-44
+24        <activity
+24-->F:\project\whatsapp-bridge\android-app\app\src\main\AndroidManifest.xml:16:9-24:20
+25            android:name="com.wabridge.MainActivity"
+25-->F:\project\whatsapp-bridge\android-app\app\src\main\AndroidManifest.xml:17:13-41
+26            android:exported="true"
+26-->F:\project\whatsapp-bridge\android-app\app\src\main\AndroidManifest.xml:19:13-36
+27            android:label="@string/app_name" >
+27-->F:\project\whatsapp-bridge\android-app\app\src\main\AndroidManifest.xml:18:13-45
+28            <intent-filter>
+28-->F:\project\whatsapp-bridge\android-app\app\src\main\AndroidManifest.xml:20:13-23:29
+29                <action android:name="android.intent.action.MAIN" />
+29-->F:\project\whatsapp-bridge\android-app\app\src\main\AndroidManifest.xml:21:17-69
+29-->F:\project\whatsapp-bridge\android-app\app\src\main\AndroidManifest.xml:21:25-66
+30
+31                <category android:name="android.intent.category.LAUNCHER" />
+31-->F:\project\whatsapp-bridge\android-app\app\src\main\AndroidManifest.xml:22:17-77
+31-->F:\project\whatsapp-bridge\android-app\app\src\main\AndroidManifest.xml:22:27-74
+32            </intent-filter>
+33        </activity>
+34        <activity
+34-->F:\project\whatsapp-bridge\android-app\app\src\main\AndroidManifest.xml:26:9-28:37
+35            android:name="com.wabridge.ChatListActivity"
+35-->F:\project\whatsapp-bridge\android-app\app\src\main\AndroidManifest.xml:27:13-45
+36            android:label="Chats" />
+36-->F:\project\whatsapp-bridge\android-app\app\src\main\AndroidManifest.xml:28:13-34
+37        <activity
+37-->F:\project\whatsapp-bridge\android-app\app\src\main\AndroidManifest.xml:30:9-32:36
+38            android:name="com.wabridge.ChatActivity"
+38-->F:\project\whatsapp-bridge\android-app\app\src\main\AndroidManifest.xml:31:13-41
+39            android:label="Chat" />
+39-->F:\project\whatsapp-bridge\android-app\app\src\main\AndroidManifest.xml:32:13-33
+40
+41        <service
+41-->F:\project\whatsapp-bridge\android-app\app\src\main\AndroidManifest.xml:34:9-36:40
+42            android:name="com.wabridge.WaSyncService"
+42-->F:\project\whatsapp-bridge\android-app\app\src\main\AndroidManifest.xml:35:13-42
+43            android:exported="false" />
+43-->F:\project\whatsapp-bridge\android-app\app\src\main\AndroidManifest.xml:36:13-37
+44    </application>
+45
+46</manifest>

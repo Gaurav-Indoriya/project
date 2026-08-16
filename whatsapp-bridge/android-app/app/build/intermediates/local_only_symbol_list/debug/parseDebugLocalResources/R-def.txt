@@ -1,0 +1,33 @@
+R_DEF: Internal format may change without notice
+local
+id avatarText
+id backButton
+id bodyText
+id chatList
+id chatTitleText
+id connStatusText
+id emptyText
+id lastMessageText
+id mediaImage
+id messageContainer
+id messageList
+id nameText
+id progressBar
+id replyField
+id saveButton
+id sendButton
+id senderText
+id serverField
+id settingsButton
+id statusText
+id timeText
+id tokenField
+id unreadBadge
+layout activity_chat
+layout activity_chat_list
+layout activity_main
+layout chat_list_item
+layout message_item
+mipmap ic_launcher
+mipmap ic_launcher_round
+string app_name
