@@ -16,7 +16,6 @@ const QRCode = require('qrcode');
 const P = require('pino');
 const path = require('path');
 const fs = require('fs');
-const initSqlJs = require('sql.js');
 
 // =====================================================
 // CONFIG
@@ -25,7 +24,6 @@ const initSqlJs = require('sql.js');
 const PORT = process.env.PORT || 3000;
 const DEVICE_TOKEN = process.env.DEVICE_TOKEN || 'gaurav03';
 const AUTH_FOLDER = path.join(__dirname, 'auth_state');
-const DB_FILE = path.join(__dirname, 'bridge.db');
 
 const logger = P({ level: 'silent' });
 
@@ -34,13 +32,38 @@ if (!fs.existsSync(AUTH_FOLDER)) {
 }
 
 // =====================================================
+// MESSAGE BUFFER (in-memory only - no file written)
+// =====================================================
+// The Android app is the permanent store for chats/media now (#4) - this
+// server only needs to hold enough recent history to hand off to the phone
+// during a sync cycle. Nothing here survives a restart, and that's fine:
+// the phone already has everything it has synced before. This also means
+// zero extra files get created on disk (no bridge.db, no backups) - only
+// auth_state, which Baileys needs to keep you logged in without rescanning
+// the QR code every restart.
+
+const MAX_MESSAGES = 3000;
+const messages = [];
+
+function pushMessage(entry) {
+  messages.push(entry);
+  if (messages.length > MAX_MESSAGES) {
+    messages.shift();
+  }
+}
+
+function markStatus(id, status) {
+  const m = messages.find(msg => msg.id === id);
+  if (m) m.status = status;
+}
+
+// =====================================================
 // MEDIA CACHE (in-memory, not disk)
 // =====================================================
-// The app downloads media once and keeps its own permanent local copy, so
-// the server only needs to hold each file long enough to hand it off. This
-// avoids relying on persistent disk, which many free hosting tiers don't
-// give you (or wipe on every redeploy/restart). Oldest entries are evicted
-// once the cache hits MAX_MEDIA_ITEMS so memory doesn't grow unbounded.
+// Same idea as the message buffer - the app downloads media once and keeps
+// its own permanent local copy, so the server only needs to hold each file
+// long enough to hand it off. Oldest entries are evicted once the cache
+// hits MAX_MEDIA_ITEMS so memory doesn't grow unbounded.
 
 const MAX_MEDIA_ITEMS = 100;
 const mediaCache = new Map(); // id -> { buffer, ext, mimeType }
@@ -57,154 +80,6 @@ function cacheMedia(id, buffer, ext) {
     const oldestKey = mediaCache.keys().next().value;
     mediaCache.delete(oldestKey);
   }
-}
-
-// =====================================================
-// DATABASE (sql.js - WASM SQLite, no native build required)
-// =====================================================
-// Replaces the old in-memory 500-message ring buffer. Messages now persist
-// across server restarts and there's no hard cap on history. (#21)
-//
-// sql.js keeps the database in memory and we explicitly export + write it
-// to disk. Writes are debounced (saved ~500ms after the last change) so a
-// burst of incoming messages doesn't write to disk on every single row.
-
-let db = null;
-let saveTimer = null;
-
-function scheduleSave() {
-  if (saveTimer) return;
-  saveTimer = setTimeout(() => {
-    saveTimer = null;
-    try {
-      const data = db.export();
-      fs.writeFileSync(DB_FILE, Buffer.from(data));
-    } catch (err) {
-      console.error('DB save failed:', err.message);
-    }
-  }, 500);
-}
-
-function run(sql, params = []) {
-  db.run(sql, params);
-  scheduleSave();
-}
-
-function all(sql, params = []) {
-  const stmt = db.prepare(sql);
-  stmt.bind(params);
-  const rows = [];
-  while (stmt.step()) {
-    rows.push(stmt.getAsObject());
-  }
-  stmt.free();
-  return rows;
-}
-
-function get(sql, params = []) {
-  const rows = all(sql, params);
-  return rows.length ? rows[0] : null;
-}
-
-async function initDb() {
-  const SQL = await initSqlJs({
-    locateFile: (file) => path.join(__dirname, 'node_modules', 'sql.js', 'dist', file)
-  });
-
-  // Auto-recover: if bridge.db exists but is corrupted or incomplete (e.g. the
-  // process was killed mid-write on a previous run), don't crash - back up the
-  // bad file and start a fresh database instead.
-  if (fs.existsSync(DB_FILE)) {
-    try {
-      const fileBuffer = fs.readFileSync(DB_FILE);
-      db = new SQL.Database(fileBuffer);
-      // Confirm the file is actually a usable database, not just bytes that loaded.
-      db.run(`CREATE TABLE IF NOT EXISTS __sanity_check (x INTEGER)`);
-      db.run(`DROP TABLE __sanity_check`);
-    } catch (err) {
-      console.error('bridge.db appears corrupted, starting fresh:', err.message);
-      const backupPath = DB_FILE + '.corrupt-' + Date.now();
-      try {
-        fs.renameSync(DB_FILE, backupPath);
-        //console.log('Backed up corrupted DB to:', backupPath);
-      } catch (renameErr) {
-        console.error('Could not back up corrupted DB:', renameErr.message);
-      }
-      db = new SQL.Database();
-    }
-  } else {
-    db = new SQL.Database();
-  }
-
-  db.run(`
-    CREATE TABLE IF NOT EXISTS messages (
-      id TEXT,
-      chat_jid TEXT NOT NULL,
-      from_me INTEGER NOT NULL,
-      text TEXT,
-      ts INTEGER NOT NULL,
-      push_name TEXT,
-      participant TEXT,
-      is_group INTEGER NOT NULL DEFAULT 0,
-      media_type TEXT,
-      media_path TEXT,
-      status TEXT DEFAULT 'sent',
-      PRIMARY KEY (id, chat_jid)
-    );
-  `);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages(ts);`);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_jid, ts);`);
-
-  db.run(`
-    CREATE TABLE IF NOT EXISTS chat_meta (
-      jid TEXT PRIMARY KEY,
-      name TEXT,
-      is_group INTEGER NOT NULL DEFAULT 0
-    );
-  `);
-
-  // One-time cleanup: remove any WhatsApp Status entries stored before
-  // Status was explicitly excluded (#3). Runs after both tables exist.
-  run(`DELETE FROM messages WHERE chat_jid = 'status@broadcast'`);
-  run(`DELETE FROM chat_meta WHERE jid = 'status@broadcast'`);
-
-  scheduleSave();
-}
-
-function pushMessage(entry) {
-  const isGroup = entry.from.endsWith('@g.us') ? 1 : 0;
-
-  run(
-    `INSERT OR IGNORE INTO messages
-      (id, chat_jid, from_me, text, ts, push_name, participant, is_group, media_type, media_path, status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      entry.id,
-      entry.from,
-      entry.fromMe ? 1 : 0,
-      entry.text,
-      entry.ts,
-      entry.pushName || '',
-      entry.participant || null,
-      isGroup,
-      entry.mediaType || null,
-      entry.mediaPath || null,
-      entry.status || 'sent'
-    ]
-  );
-
-  if (entry.pushName) {
-    run(
-      `INSERT INTO chat_meta (jid, name, is_group) VALUES (?, ?, ?)
-       ON CONFLICT(jid) DO UPDATE SET
-         name = CASE WHEN excluded.name IS NOT NULL AND excluded.name != '' THEN excluded.name ELSE chat_meta.name END`,
-      [entry.from, entry.pushName, isGroup]
-    );
-  }
-}
-
-function markStatus(id, status) {
-  run(`UPDATE messages SET status = ? WHERE id = ?`, [status, id]);
 }
 
 // =====================================================
@@ -254,16 +129,9 @@ async function startSock() {
   isStarting = true;
 
   try {
-    // console.log('       STARTING WHATSAPP SOCKET');
-    // console.log('========================================');
-    // console.log('\n========================================');
-    // console.log('Auth folder:', AUTH_FOLDER);
-
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_FOLDER);
-    //console.log('Existing credentials:', state.creds.registered);
 
     const { version } = await fetchLatestBaileysVersion();
-    //console.log('WhatsApp Web version:', version.join('.'));
 
     sock = makeWASocket({
       version,
@@ -291,31 +159,18 @@ async function startSock() {
       const { connection, lastDisconnect, qr } = update;
 
       if (qr) {
-        //console.log('\n========================================');
-        //console.log('          QR CODE RECEIVED');
-        //console.log('========================================');
-
         lastQR = qr;
         connectionState = 'qr';
         updateStatus();
 
-        qrcodeTerminal.generate(qr, { small: true }, (code) => {
-          // console.log('\nScan this QR with WhatsApp:\n');
-          // console.log(code);
-          // console.log(`\nBrowser QR: http://localhost:${PORT}/qr/page\n`);
-        });
+        qrcodeTerminal.generate(qr, { small: true }, () => {});
       }
 
       if (connection === 'open') {
         connectionState = 'ready';
         lastQR = null;
         updateStatus();
-
-        // console.log('\n========================================');
-           console.log('       WHATSAPP CONNECTED');
-        // console.log('========================================');
-        // console.log('User:', sock?.user?.id || 'Unknown');
-        // console.log('');
+        console.log('WHATSAPP CONNECTED - User:', sock?.user?.id || 'Unknown');
       }
 
       if (connection === 'close') {
@@ -330,26 +185,16 @@ async function startSock() {
 
         const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
 
-        // console.log('\n========================================');
-        // console.log('     WHATSAPP CONNECTION CLOSED');
-        // console.log('========================================');
-        // console.log('Status code:', statusCode);
-        // console.log('Reconnect:', shouldReconnect);
-        // console.log('========================================');
-
         connectionState = 'disconnected';
         lastQR = null;
         updateStatus();
 
         if (!shouldReconnect) {
-          // console.log('\nWhatsApp logged out.');
-          // console.log('Delete auth_state and restart if you want a new QR.\n');
+          console.log('WhatsApp logged out. Delete auth_state and restart for a new QR.');
           return;
         }
 
         if (reconnectTimer) clearTimeout(reconnectTimer);
-
-        //console.log('\nReconnecting in 5 seconds...');
         reconnectTimer = setTimeout(() => {
           reconnectTimer = null;
           startSock();
@@ -359,7 +204,6 @@ async function startSock() {
       if (connection === 'connecting') {
         connectionState = 'connecting';
         updateStatus();
-        //console.log('Connecting to WhatsApp...');
       }
     });
 
@@ -427,7 +271,7 @@ async function startSock() {
             }
           }
 
-          const entry = {
+          pushMessage({
             id,
             from,
             fromMe: isFromMe,
@@ -438,14 +282,10 @@ async function startSock() {
             mediaType,
             mediaPath: hasMediaCached ? id : null,
             status: isFromMe ? 'sent' : 'received'
-          };
-
-          pushMessage(entry);
-
-          //console.log(`[${isFromMe ? 'OUT' : 'IN'}] ${from}${participant ? ' (' + participant + ')' : ''}: ${entry.text}`);
+          });
         }
       } catch (error) {
-        //console.error('Message processing error:', error);
+        console.error('Message processing error:', error);
       }
     });
 
@@ -466,12 +306,7 @@ async function startSock() {
 
   } catch (error) {
     isStarting = false;
-
-    console.error('\n========================================');
-    console.error('FAILED TO START WHATSAPP');
-    console.error('========================================');
-    console.error(error);
-    console.error('========================================');
+    console.error('FAILED TO START WHATSAPP:', error);
 
     connectionState = 'disconnected';
     lastQR = null;
@@ -552,7 +387,7 @@ app.get('/status', (req, res) => {
 });
 
 // =====================================================
-// QR JSON / QR PAGE (unchanged)
+// QR JSON / QR PAGE
 // =====================================================
 
 app.get('/qr', (req, res) => {
@@ -663,31 +498,28 @@ Tap:<br>
 
 // =====================================================
 // MESSAGES
-// Reads from sql.js instead of the old in-memory array, and includes
-// mediaType/mediaPath/status/participant fields.
+// Served straight from the in-memory buffer - no DB file involved.
 // =====================================================
 
 app.get('/messages', (req, res) => {
   const since = parseInt(req.query.since) || 0;
   const chatJid = req.query.chat || null;
 
-  const rows = chatJid
-    ? all(`SELECT * FROM messages WHERE ts > ? AND chat_jid = ? AND chat_jid != 'status@broadcast' ORDER BY ts ASC`, [since, chatJid])
-    : all(`SELECT * FROM messages WHERE ts > ? AND chat_jid != 'status@broadcast' ORDER BY ts ASC`, [since]);
-
-  const result = rows.map(r => ({
-    id: r.id,
-    from: r.chat_jid,
-    fromMe: !!r.from_me,
-    text: r.text,
-    ts: r.ts,
-    pushName: r.push_name,
-    participant: r.participant,
-    isGroup: !!r.is_group,
-    mediaType: r.media_type,
-    mediaUrl: r.media_path ? `/media/${r.id}` : null,
-    status: r.status
-  }));
+  const result = messages
+    .filter(m => m.ts > since && m.from !== 'status@broadcast' && (!chatJid || m.from === chatJid))
+    .map(m => ({
+      id: m.id,
+      from: m.from,
+      fromMe: m.fromMe,
+      text: m.text,
+      ts: m.ts,
+      pushName: m.pushName,
+      participant: m.participant,
+      isGroup: m.from.endsWith('@g.us'),
+      mediaType: m.mediaType,
+      mediaUrl: m.mediaPath ? `/media/${m.id}` : null,
+      status: m.status
+    }));
 
   res.json({
     messages: result,
@@ -715,27 +547,28 @@ app.get('/media/:id', (req, res) => {
 
 // =====================================================
 // CHATS
-// Returns both individual chats (derived from stored message history) and
-// WhatsApp groups (fetched live from Baileys), each tagged isGroup. (#12, #17)
+// Individuals derived from the in-memory message buffer, groups fetched
+// live from Baileys. (#12, #17)
 // =====================================================
 
 app.get('/chats', async (req, res) => {
   try {
-    const individualRows = all(`
-      SELECT chat_jid, MAX(ts) as last_ts,
-             (SELECT push_name FROM messages m2 WHERE m2.chat_jid = m1.chat_jid AND m2.push_name != '' ORDER BY ts DESC LIMIT 1) as name
-      FROM messages m1
-      WHERE is_group = 0 AND chat_jid != 'status@broadcast'
-      GROUP BY chat_jid
-      ORDER BY last_ts DESC
-    `);
-
-    const individuals = individualRows.map(r => ({
-      id: r.chat_jid,
-      name: r.name || r.chat_jid.split('@')[0],
-      isGroup: false,
-      lastTs: r.last_ts
-    }));
+    const byJid = new Map();
+    for (const m of messages) {
+      if (m.from === 'status@broadcast' || m.from.endsWith('@g.us')) continue;
+      const existing = byJid.get(m.from);
+      if (!existing || m.ts > existing.lastTs) {
+        byJid.set(m.from, {
+          id: m.from,
+          name: m.pushName || (existing ? existing.name : m.from.split('@')[0]),
+          isGroup: false,
+          lastTs: m.ts
+        });
+      } else if (m.pushName && !existing.name) {
+        existing.name = m.pushName;
+      }
+    }
+    const individuals = Array.from(byJid.values()).sort((a, b) => b.lastTs - a.lastTs);
 
     let groups = [];
     if (sock && connectionState === 'ready') {
@@ -798,19 +631,12 @@ app.post('/send', async (req, res) => {
 });
 
 // =====================================================
-// STARTUP
-// DB init is async (loading the WASM module), so the server only starts
-// listening / connecting to WhatsApp once it's ready.
+// SERVER START
+// No async DB init needed anymore - starts immediately.
 // =====================================================
 
-async function main() {
-  await initDb();
+app.listen(PORT, () => {
+  console.log(`WhatsApp Bridge Server running on http://localhost:${PORT}`);
+});
 
-  app.listen(PORT, () => {
-    console.log(`WhatsApp Server Started on: http://localhost:${PORT}`);
-  });
-
-  startSock();
-}
-
-main();
+startSock();
